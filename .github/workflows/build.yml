@@ -1,4 +1,4 @@
-Name: Build AAB Google Play
+name: Build AAB Google Play
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: 3. Crear App y Configuración Capacitor
+      - name: 3. Crear App y Configuracion Capacitor
         run: |
           mkdir -p mobile-app
 
@@ -128,22 +128,24 @@ jobs:
           </html>
           EOF
 
-      - name: 4. Generar Proyecto Android y Forzar SDK Mínimo 24
+      - name: 4. Generar Proyecto Android y Forzar SDK Minimo 24
         run: |
           npm install
           npx cap add android
           npx cap sync android
-          
-          # Forzar minSdkVersion a 24 de forma segura usando Python para evitar fallos de regex en gradle
-          python3 -c "
-          path = 'android/app/build.gradle'
-          with open(path, 'r') as f:
-              content = f.read()
-          import re
-          content = re.sub(r'minSdkVersion\s+\d+', 'minSdkVersion 24', content)
-          with open(path, 'w') as f:
-              f.write(content)
-          "
+
+          # 1. Cambiar minSdkVersion en android/variables.gradle (donde Capacitor guarda el valor real)
+          sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 24/g' android/variables.gradle
+
+          # 2. Forzar minSdkVersion 24 directamente en android/app/build.gradle
+          sed -i 's/minSdkVersion rootProject.ext.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle
+          sed -i 's/minSdkVersion [0-9]*/minSdkVersion 24/g' android/app/build.gradle
+
+          # 3. Incrementar versionCode automaticamente para evitar conflictos en Google Play
+          sed -i 's/versionCode 1/versionCode ${{ github.run_number }}/g' android/app/build.gradle
+
+          # 4. Verificar en consola que el cambio se aplico
+          grep -n "minSdkVersion" android/variables.gradle android/app/build.gradle
 
       - name: 5. Firmar y Compilar AAB
         run: |
