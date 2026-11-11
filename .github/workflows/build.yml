@@ -1,4 +1,4 @@
-name: Build AAB Google Play
+Name: Build AAB Google Play
 
 on:
   push:
@@ -132,9 +132,18 @@ jobs:
         run: |
           npm install
           npx cap add android
-          sed -i 's/minSdkVersion 22/minSdkVersion 24/g' android/app/build.gradle
-          sed -i 's/minSdkVersion 23/minSdkVersion 24/g' android/app/build.gradle
           npx cap sync android
+          
+          # Forzar minSdkVersion a 24 de forma segura usando Python para evitar fallos de regex en gradle
+          python3 -c "
+          path = 'android/app/build.gradle'
+          with open(path, 'r') as f:
+              content = f.read()
+          import re
+          content = re.sub(r'minSdkVersion\s+\d+', 'minSdkVersion 24', content)
+          with open(path, 'w') as f:
+              f.write(content)
+          "
 
       - name: 5. Firmar y Compilar AAB
         run: |
