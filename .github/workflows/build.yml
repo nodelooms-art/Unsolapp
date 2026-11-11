@@ -21,7 +21,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: 3. Crear App y Configuracion Capacitor
+      - name: 3. Crear App y Configuración Capacitor
         run: |
           mkdir -p mobile-app
 
@@ -128,10 +128,12 @@ jobs:
           </html>
           EOF
 
-      - name: 4. Generar Proyecto Android
+      - name: 4. Generar Proyecto Android y Forzar SDK Mínimo 24
         run: |
           npm install
           npx cap add android
+          sed -i 's/minSdkVersion 22/minSdkVersion 24/g' android/app/build.gradle
+          sed -i 's/minSdkVersion 23/minSdkVersion 24/g' android/app/build.gradle
           npx cap sync android
 
       - name: 5. Firmar y Compilar AAB
