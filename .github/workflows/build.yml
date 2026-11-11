@@ -1,0 +1,163 @@
+name: Build AAB Google Play
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout
+        uses: actions/checkout@v4
+
+      - name: 2. Setup Node 20 & Java 21
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: 3. Crear App y Configuracion Capacitor
+        run: |
+          mkdir -p mobile-app
+
+          cat << 'EOF' > package.json
+          {
+            "name": "kronexs-notes",
+            "version": "1.0.0",
+            "description": "Organizador de notas y tareas diarias",
+            "main": "mobile-app/index.html",
+            "dependencies": {
+              "@capacitor/android": "^6.0.0",
+              "@capacitor/cli": "^6.0.0",
+              "@capacitor/core": "^6.0.0"
+            }
+          }
+          EOF
+
+          cat << 'EOF' > capacitor.config.json
+          {
+            "appId": "com.kronexs.unsol",
+            "appName": "Kronexs Notes",
+            "webDir": "mobile-app",
+            "bundledWebRuntime": false,
+            "server": {
+              "androidScheme": "https"
+            }
+          }
+          EOF
+
+          cat << 'EOF' > mobile-app/index.html
+          <!DOCTYPE html>
+          <html lang="es">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <title>Kronexs Notes</title>
+            <style>
+              * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+              body { margin: 0; background: #0B0E14; color: #F8FAFC; padding: 20px; }
+              .card { background: #161B26; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 18px; margin-bottom: 16px; }
+              h1 { font-size: 20px; margin: 0 0 4px 0; color: #F59E0B; }
+              p.sub { font-size: 12px; color: #94A3B8; margin: 0 0 16px 0; }
+              input, textarea, select { width: 100%; background: #0B0E14; border: 1px solid #334155; color: #fff; padding: 12px; border-radius: 12px; margin-bottom: 10px; font-size: 14px; }
+              button.primary { width: 100%; background: #F59E0B; color: #0B0E14; border: none; padding: 14px; border-radius: 12px; font-weight: 700; font-size: 14px; cursor: pointer; }
+              .note-item { background: #0B0E14; border-left: 4px solid #F59E0B; padding: 12px; border-radius: 10px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: start; }
+              .note-title { font-weight: 700; font-size: 14px; color: #F8FAFC; }
+              .note-cat { font-size: 11px; color: #F59E0B; text-transform: uppercase; }
+              .note-body { font-size: 13px; color: #CBD5E1; margin-top: 4px; }
+              .del-btn { background: #EF4444; color: #fff; border: none; border-radius: 8px; padding: 6px 10px; font-size: 11px; cursor: pointer; }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h1>Kronexs Notes</h1>
+              <p class="sub">Organizador personal de tareas, ideas y recordatorios diarios.</p>
+              <input id="title" type="text" placeholder="Título de la tarea o nota..." />
+              <select id="category">
+                <option value="Trabajo">📌 Trabajo</option>
+                <option value="Personal">🏠 Personal</option>
+                <option value="Finanzas">📊 Presupuesto</option>
+              </select>
+              <textarea id="content" rows="3" placeholder="Escribe el detalle aquí..."></textarea>
+              <button class="primary" onclick="addNote()">+ Guardar Nota</button>
+            </div>
+            <div class="card">
+              <h1 style="font-size:16px; margin-bottom:12px;">Mis Notas Guardadas</h1>
+              <div id="list"></div>
+            </div>
+            <script>
+              let notes = JSON.parse(localStorage.getItem('kx_notes') || '[{"title":"Bienvenido a Kronexs Notes","cat":"Personal","body":"Crea y organiza tus notas diarias sin conexión."}]');
+              function render() {
+                const el = document.getElementById('list');
+                if (!notes.length) { el.innerHTML = '<p class="sub">No hay notas registradas.</p>'; return; }
+                el.innerHTML = notes.map((n, i) => `
+                  <div class="note-item">
+                    <div>
+                      <span class="note-cat">${n.cat}</span>
+                      <div class="note-title">${n.title}</div>
+                      <div class="note-body">${n.body}</div>
+                    </div>
+                    <button class="del-btn" onclick="delNote(${i})">Borrar</button>
+                  </div>
+                `).join('');
+              }
+              function addNote() {
+                const title = document.getElementById('title').value.trim();
+                const cat = document.getElementById('category').value;
+                const body = document.getElementById('content').value.trim();
+                if (!title || !body) return;
+                notes.unshift({ title, cat, body });
+                localStorage.setItem('kx_notes', JSON.stringify(notes));
+                document.getElementById('title').value = '';
+                document.getElementById('content').value = '';
+                render();
+              }
+              function delNote(i) {
+                notes.splice(i, 1);
+                localStorage.setItem('kx_notes', JSON.stringify(notes));
+                render();
+              }
+              render();
+            </script>
+          </body>
+          </html>
+          EOF
+
+      - name: 4. Generar Proyecto Android
+        run: |
+          npm install
+          npx cap add android
+          npx cap sync android
+
+      - name: 5. Firmar y Compilar AAB
+        run: |
+          keytool -genkeypair -v \
+            -keystore android/app/release-key.jks \
+            -alias unsol_key \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass Kronexs2026! \
+            -keypass Kronexs2026! \
+            -dname "CN=Kronexs, OU=Mobile, O=Kronexs, L=Tacna, ST=Tacna, C=PE"
+
+          cd android
+          chmod +x gradlew
+          ./gradlew bundleRelease \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/release-key.jks \
+            -Pandroid.injected.signing.store.password=Kronexs2026! \
+            -Pandroid.injected.signing.key.alias=unsol_key \
+            -Pandroid.injected.signing.key.password=Kronexs2026!
+
+      - name: 6. Subir AAB y Keystore
+        uses: actions/upload-artifact@v4
+        with:
+          name: PAQUETE-GOOGLE-PLAY-LISTO
+          path: |
+            android/app/build/outputs/bundle/release/*.aab
+            android/app/release-key.jks
