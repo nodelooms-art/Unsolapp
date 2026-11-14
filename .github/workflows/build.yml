@@ -1,15 +1,23 @@
-name: Build AAB Google Play
+name: Build AAB API 36 Auditado
 
 on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+env:
+  # ID exclusivo para la nueva app en Play Console (cámbialo solo si tu app ya fijó otro ID)
+  APP_ID: "com.kronexs.notespro"
+  VERSION_BASE: 100
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Checkout
+      - name: 1. Checkout Repository
         uses: actions/checkout@v4
 
       - name: 2. Setup Node 20 & Java 21
@@ -21,27 +29,33 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: 3. Crear App y Configuración Capacitor
+      - name: 3. Instalar Android SDK 36 y Build-Tools
         run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;35.0.0"
+
+      - name: 4. Crear Proyecto Capacitor Limpio
+        run: |
+          rm -rf android node_modules package-lock.json mobile-app capacitor.config.*
           mkdir -p mobile-app
 
-          cat << 'EOF' > package.json
+          cat << EOF > package.json
           {
-            "name": "kronexs-notes",
+            "name": "kronexs-notes-pro",
             "version": "1.0.0",
             "description": "Organizador de notas y tareas diarias",
             "main": "mobile-app/index.html",
             "dependencies": {
-              "@capacitor/android": "^6.0.0",
-              "@capacitor/cli": "^6.0.0",
-              "@capacitor/core": "^6.0.0"
+              "@capacitor/android": "^7.0.0",
+              "@capacitor/cli": "^7.0.0",
+              "@capacitor/core": "^7.0.0"
             }
           }
           EOF
 
-          cat << 'EOF' > capacitor.config.json
+          cat << EOF > capacitor.config.json
           {
-            "appId": "com.kronexs.notes",
+            "appId": "${APP_ID}",
             "appName": "Kronexs Notes",
             "webDir": "mobile-app",
             "bundledWebRuntime": false,
@@ -128,37 +142,140 @@ jobs:
           </html>
           EOF
 
-      - name: 4. Generar Proyecto y Ajustar SDK Mínimo
+      - name: 5. Configurar Gradle con API 36 Nativo
         run: |
           npm install
           npx cap add android
-          npx cap sync android
-          sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 24/g' android/variables.gradle
 
-      - name: 5. Firmar y Compilar AAB
+          VER_CODE=$(( ${{ env.VERSION_BASE }} + ${{ github.run_number }} ))
+
+          # 1. Definir API 36 en variables.gradle (que leen todos los submodulos de Capacitor)
+          cat << 'EOF' > android/variables.gradle
+          ext {
+              minSdkVersion = 24
+              compileSdkVersion = 36
+              targetSdkVersion = 36
+              androidxActivityVersion = '1.9.2'
+              androidxAppCompatVersion = '1.7.0'
+              androidxCoordinatorLayoutVersion = '1.2.0'
+              androidxCoreVersion = '1.13.1'
+              androidxFragmentVersion = '1.8.4'
+              coreSplashScreenVersion = '1.0.1'
+              androidxWebkitVersion = '1.12.1'
+              junitVersion = '4.13.2'
+              androidxJunitVersion = '1.2.1'
+              androidxEspressoCoreVersion = '3.6.1'
+              cordovaAndroidVersion = '10.1.1'
+          }
+          EOF
+
+          # 2. Definir android/app/build.gradle limpio apuntando a variables.gradle y API 36
+          cat << EOF > android/app/build.gradle
+          apply plugin: 'com.android.application'
+
+          android {
+              namespace "${APP_ID}"
+              compileSdk rootProject.ext.compileSdkVersion
+              defaultConfig {
+                  applicationId "${APP_ID}"
+                  minSdkVersion rootProject.ext.minSdkVersion
+                  targetSdkVersion rootProject.ext.targetSdkVersion
+                  versionCode ${VER_CODE}
+                  versionName "1.0.${VER_CODE}"
+                  testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+                  aaptOptions {
+                      ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+                  }
+              }
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+                  }
+              }
+          }
+
+          repositories {
+              flatDir{
+                  dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+              }
+          }
+
+          dependencies {
+              implementation fileTree(include: ['*.jar'], dir: 'libs')
+              implementation "androidx.appcompat:appcompat:\$androidxAppCompatVersion"
+              implementation "androidx.coordinatorlayout:coordinatorlayout:\$androidxCoordinatorLayoutVersion"
+              implementation "androidx.core:core-splashscreen:\$coreSplashScreenVersion"
+              implementation project(':capacitor-android')
+              testImplementation "junit:junit:\$junitVersion"
+              androidTestImplementation "androidx.test.ext:junit:\$androidxJunitVersion"
+              androidTestImplementation "androidx.test.espresso:espresso-core:\$androidxEspressoCoreVersion"
+              implementation project(':capacitor-cordova-android-plugins')
+          }
+
+          apply from: 'capacitor.build.gradle'
+          EOF
+
+          npx cap sync android
+
+      - name: 6. Compilar AAB y Auditar API 36 con Bundletool
         run: |
-          keytool -genkeypair -v \
-            -keystore android/app/release-key.jks \
-            -alias unsol_key \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass Kronexs2026! \
-            -keypass Kronexs2026! \
-            -dname "CN=Kronexs, OU=Mobile, O=Kronexs, L=Tacna, ST=Tacna, C=PE"
+          KEYSTORE_FILE="$GITHUB_WORKSPACE/release-key.jks"
+
+          if [ ! -f "$KEYSTORE_FILE" ]; then
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE_FILE" \
+              -alias unsol_key \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass Kronexs2026! \
+              -keypass Kronexs2026! \
+              -dname "CN=Kronexs, OU=Mobile, O=Kronexs, L=Tacna, ST=Tacna, C=PE"
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add release-key.jks
+            git commit -m "Guardar keystore oficial [skip ci]" || true
+            git push || true
+          fi
+
+          echo "=== HUELLA SHA1 USADA ==="
+          keytool -list -v -keystore "$KEYSTORE_FILE" -storepass Kronexs2026! | grep "SHA1:"
 
           cd android
           chmod +x gradlew
           ./gradlew bundleRelease \
-            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/release-key.jks \
+            -Pandroid.injected.signing.store.file="$KEYSTORE_FILE" \
             -Pandroid.injected.signing.store.password=Kronexs2026! \
             -Pandroid.injected.signing.key.alias=unsol_key \
             -Pandroid.injected.signing.key.password=Kronexs2026!
 
-      - name: 6. Subir AAB Listo
+          VER_CODE=$(( ${{ env.VERSION_BASE }} + ${{ github.run_number }} ))
+          AAB_OUT="$GITHUB_WORKSPACE/kronexs-api36-v${VER_CODE}.aab"
+          cp app/build/outputs/bundle/release/app-release.aab "$AAB_OUT"
+
+          # Auditoria real del archivo .aab con Google Bundletool
+          curl -sL https://github.com/google/bundletool/releases/download/1.17.2/bundletool-all-1.17.2.jar -o /tmp/bundletool.jar
+          TARGET_SDK=$(java -jar /tmp/bundletool.jar dump manifest --bundle="$AAB_OUT" --xpath="/manifest/uses-sdk/@android:targetSdkVersion")
+          VERSION_CODE=$(java -jar /tmp/bundletool.jar dump manifest --bundle="$AAB_OUT" --xpath="/manifest/@android:versionCode")
+          PACKAGE_NAME=$(java -jar /tmp/bundletool.jar dump manifest --bundle="$AAB_OUT" --xpath="/manifest/@package")
+
+          echo "========================================="
+          echo "AUDITORIA INTERNA DEL AAB GENERADO:"
+          echo "Package ID     : $PACKAGE_NAME"
+          echo "Version Code   : $VERSION_CODE"
+          echo "Target SDK API : $TARGET_SDK"
+          echo "========================================="
+
+          if [ "$TARGET_SDK" != "36" ]; then
+            echo "ERROR CRITICO: El AAB no tiene Target SDK 36 (tiene $TARGET_SDK)"
+            exit 1
+          fi
+
+      - name: 7. Subir AAB Verificado
         uses: actions/upload-artifact@v4
         with:
-          name: PAQUETE-GOOGLE-PLAY-LISTO
+          name: AAB-AUDITADO-API36
           path: |
-            android/app/build/outputs/bundle/release/*.aab
-            android/app/release-key.jks
+            kronexs-api36-v*.aab
