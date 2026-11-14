@@ -193,4 +193,3 @@ jobs:
           path: |
             android/app/build/outputs/bundle/release/*.aab
             release-key.jks
-
