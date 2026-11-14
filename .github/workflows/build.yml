@@ -5,14 +5,11 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Checkout Repository
+      - name: 1. Checkout
         uses: actions/checkout@v4
 
       - name: 2. Setup Node 20 & Java 21
@@ -24,7 +21,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: 3. Generate Web App & Capacitor Config
+      - name: 3. Crear App y Configuración Capacitor
         run: |
           mkdir -p mobile-app
 
@@ -131,66 +128,37 @@ jobs:
           </html>
           EOF
 
-      - name: 4. Build Android Platform & Enforce SDK 24-36 + Gradle 8.9
+      - name: 4. Generar Proyecto y Ajustar SDK Mínimo
         run: |
-          rm -rf android
           npm install
           npx cap add android
           npx cap sync android
-
-          # Upgrade Gradle Wrapper and Android Gradle Plugin for API 36 support
-          sed -i 's/gradle-[0-9.]*-all.zip/gradle-8.9-all.zip/g' android/gradle/wrapper/gradle-wrapper.properties
-          sed -i 's/com.android.tools.build:gradle:[0-9.]*/com.android.tools.build:gradle:8.7.2/g' android/build.gradle
-
-          # Enforce minSdk 24, compileSdk 36, targetSdk 36
           sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 24/g' android/variables.gradle
-          sed -i 's/compileSdkVersion = [0-9]*/compileSdkVersion = 36/g' android/variables.gradle
-          sed -i 's/targetSdkVersion = [0-9]*/targetSdkVersion = 36/g' android/variables.gradle
-          sed -i 's/minSdkVersion rootProject.ext.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle
-          sed -i 's/minSdkVersion [0-9]*/minSdkVersion 24/g' android/app/build.gradle
-          sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 36/g' android/app/build.gradle
 
-          # Increment versionCode dynamically using github.run_number
-          sed -i 's/versionCode [0-9]*/versionCode ${{ github.run_number }}/g' android/app/build.gradle
-
-          # Print resulting configuration for verification
-          cat android/variables.gradle
-          grep -nE "SdkVersion|versionCode|applicationId" android/app/build.gradle
-
-      - name: 5. Create or Reuse Signing Keystore & Build Signed AAB
+      - name: 5. Firmar y Compilar AAB
         run: |
-          KEYSTORE_PATH="$GITHUB_WORKSPACE/release-key.jks"
-
-          if [ ! -f "$KEYSTORE_PATH" ]; then
-            keytool -genkeypair -v \
-              -keystore "$KEYSTORE_PATH" \
-              -alias unsol_key \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass Kronexs2026! \
-              -keypass Kronexs2026! \
-              -dname "CN=Kronexs, OU=Mobile, O=Kronexs, L=Tacna, ST=Tacna, C=PE"
-
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -f release-key.jks
-            git commit -m "chore: persist signing keystore [skip ci]"
-            git push origin HEAD:main
-          fi
+          keytool -genkeypair -v \
+            -keystore android/app/release-key.jks \
+            -alias unsol_key \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass Kronexs2026! \
+            -keypass Kronexs2026! \
+            -dname "CN=Kronexs, OU=Mobile, O=Kronexs, L=Tacna, ST=Tacna, C=PE"
 
           cd android
           chmod +x gradlew
           ./gradlew bundleRelease \
-            -Pandroid.injected.signing.store.file="$KEYSTORE_PATH" \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/release-key.jks \
             -Pandroid.injected.signing.store.password=Kronexs2026! \
             -Pandroid.injected.signing.key.alias=unsol_key \
             -Pandroid.injected.signing.key.password=Kronexs2026!
 
-      - name: 6. Upload Signed AAB & Backup Keystore
+      - name: 6. Subir AAB Listo
         uses: actions/upload-artifact@v4
         with:
           name: PAQUETE-GOOGLE-PLAY-LISTO
           path: |
             android/app/build/outputs/bundle/release/*.aab
-            release-key.jks
+            android/app/release-key.jks
