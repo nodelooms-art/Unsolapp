@@ -5,11 +5,14 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Checkout
+      - name: 1. Checkout Repository
         uses: actions/checkout@v4
 
       - name: 2. Setup Node 20 & Java 21
@@ -21,7 +24,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: 3. Crear App y Configuracion Capacitor
+      - name: 3. Generate Web App & Capacitor Config
         run: |
           mkdir -p mobile-app
 
@@ -41,7 +44,7 @@ jobs:
 
           cat << 'EOF' > capacitor.config.json
           {
-            "appId": "com.kronexs.unsol",
+            "appId": "com.kronexs.notes",
             "appName": "Kronexs Notes",
             "webDir": "mobile-app",
             "bundledWebRuntime": false,
@@ -128,49 +131,67 @@ jobs:
           </html>
           EOF
 
-      - name: 4. Generar Proyecto Android y Forzar SDK Minimo 24
+      - name: 4. Build Android Platform & Enforce minSdkVersion 24 + versionCode
         run: |
+          rm -rf android
           npm install
           npx cap add android
           npx cap sync android
 
-          # 1. Cambiar minSdkVersion en android/variables.gradle (donde Capacitor guarda el valor real)
+          # Enforce minSdkVersion 24 in both variables.gradle and app/build.gradle
           sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 24/g' android/variables.gradle
-
-          # 2. Forzar minSdkVersion 24 directamente en android/app/build.gradle
           sed -i 's/minSdkVersion rootProject.ext.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle
           sed -i 's/minSdkVersion [0-9]*/minSdkVersion 24/g' android/app/build.gradle
 
-          # 3. Incrementar versionCode automaticamente para evitar conflictos en Google Play
-          sed -i 's/versionCode 1/versionCode ${{ github.run_number }}/g' android/app/build.gradle
+          # Increment versionCode dynamically using github.run_number
+          sed -i 's/versionCode [0-9]*/versionCode ${{ github.run_number }}/g' android/app/build.gradle
 
-          # 4. Verificar en consola que el cambio se aplico
-          grep -n "minSdkVersion" android/variables.gradle android/app/build.gradle
+          # Strict verification assertions
+          grep -q "minSdkVersion = 24" android/variables.gradle
+          grep -q "minSdkVersion 24" android/app/build.gradle
+          grep -q 'applicationId "com.kronexs.notes"' android/app/build.gradle
+          grep -nE "minSdkVersion|versionCode|applicationId" android/variables.gradle android/app/build.gradle
 
-      - name: 5. Firmar y Compilar AAB
+      - name: 5. Create or Reuse Signing Keystore & Build Signed AAB
         run: |
-          keytool -genkeypair -v \
-            -keystore android/app/release-key.jks \
-            -alias unsol_key \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass Kronexs2026! \
-            -keypass Kronexs2026! \
-            -dname "CN=Kronexs, OU=Mobile, O=Kronexs, L=Tacna, ST=Tacna, C=PE"
+          KEYSTORE_PATH="$GITHUB_WORKSPACE/release-key.jks"
+
+          if [ ! -f "$KEYSTORE_PATH" ]; then
+            echo "Generating new permanent release keystore..."
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE_PATH" \
+              -alias unsol_key \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass Kronexs2026! \
+              -keypass Kronexs2026! \
+              -dname "CN=Kronexs, OU=Mobile, O=Kronexs, L=Tacna, ST=Tacna, C=PE"
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -f release-key.jks
+            git commit -m "chore: persist signing keystore [skip ci]"
+            git push origin HEAD:main
+          else
+            echo "Reusing existing repository release keystore..."
+          fi
+
+          # Log SHA-1 fingerprint for verification against Google Play Console
+          keytool -list -v -keystore "$KEYSTORE_PATH" -storepass Kronexs2026! | grep "SHA1:"
 
           cd android
           chmod +x gradlew
           ./gradlew bundleRelease \
-            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/release-key.jks \
+            -Pandroid.injected.signing.store.file="$KEYSTORE_PATH" \
             -Pandroid.injected.signing.store.password=Kronexs2026! \
             -Pandroid.injected.signing.key.alias=unsol_key \
             -Pandroid.injected.signing.key.password=Kronexs2026!
 
-      - name: 6. Subir AAB y Keystore
+      - name: 6. Upload Signed AAB & Backup Keystore
         uses: actions/upload-artifact@v4
         with:
           name: PAQUETE-GOOGLE-PLAY-LISTO
           path: |
             android/app/build/outputs/bundle/release/*.aab
-            android/app/release-key.jks
+            release-key.jks
